@@ -8,7 +8,6 @@ def summ():
     sum=a+b+c
     return f"the total is{sum}"
 
-
 if __name__ == "__main__":
     
     app.run(host="0.0.0.0",port=5000)
