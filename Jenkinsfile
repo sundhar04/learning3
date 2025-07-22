@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        EC2_HOST = "ec2-18-175-181-246.eu-west-2.compute.amazonaws.com"
+        EC2_HOST = "ec2-13-40-196-213.eu-west-2.compute.amazonaws.com"
         EC2_USER = "ubuntu"
         APP_DIR  = "learning3"  
         IMAGE_NAME = "sundhar04/githubimage:latest"
