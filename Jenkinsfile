@@ -9,6 +9,7 @@ pipeline {
         // PORT_NUMBER will be set dynamically in the script block
     }
     stages {
+        
         stage("Checkout") {
             steps {
                // Use default SCM checkout instead of explicit scmGit to avoid conflicts
