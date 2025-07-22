@@ -8,7 +8,7 @@ pipeline {
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
     }
 
-    
+
     stages {
         stage("Checkout") {
             steps {
