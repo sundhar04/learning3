@@ -19,6 +19,7 @@ pipeline {
                    echo "Branch: ${env.BRANCH_NAME}, Port: ${env.PORT_NUMBER}, Container: ${env.CONTAINER_NAME}"
                }
             }
+            
         }
         stage("Deploy to EC2") {
             steps {
