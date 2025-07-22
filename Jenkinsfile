@@ -8,6 +8,7 @@ pipeline {
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
         // PORT_NUMBER will be set dynamically in the script block
     }
+
     
     stages {
         stage("Checkout") {
