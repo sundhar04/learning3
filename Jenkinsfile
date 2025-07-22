@@ -6,7 +6,6 @@ pipeline {
         APP_DIR  = "learning3"  
         IMAGE_NAME = "sundhar04/githubimage:latest"
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
-        // PORT_NUMBER will be set dynamically in the script block
     }
     stages {
         
