@@ -3,7 +3,7 @@ pipeline {
     environment {
         EC2_HOST = "ec2-18-175-181-246.eu-west-2.compute.amazonaws.com"
         EC2_USER = "ubuntu"
-        APP_DIR  = "learning2"
+        APP_DIR  = "learning3"  
         IMAGE_NAME = "sundhar04/githubimage:latest"
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
         // PORT_NUMBER will be set dynamically in the script block
@@ -11,7 +11,8 @@ pipeline {
     stages {
         stage("Checkout") {
             steps {
-               checkout scmGit(branches: [[name: '*/${env.BRANCH_NAME}']], extensions: [], userRemoteConfigs: [[credentialsId: 'githubcredd', url: 'https://github.com/sundhar04/learning2.git']])
+               // Use default SCM checkout instead of explicit scmGit to avoid conflicts
+               checkout scm
                script {
                    // Set PORT_NUMBER dynamically
                    env.PORT_NUMBER = getBranchPort(env.BRANCH_NAME)
@@ -22,7 +23,7 @@ pipeline {
         stage("Deploy to EC2") {
             steps {
                 sshagent(['ec2-ssh-key']) {
-                    withCredentials([usernamePassword(credentialsId: 'githubcredd', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                    withCredentials([usernamePassword(credentialsId: 'githubcreddddd', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                         sh """
 ssh -o StrictHostKeyChecking=no \$EC2_USER@\$EC2_HOST << "EOF"
 set -e
@@ -50,7 +51,7 @@ echo "Cloning or updating repo"
 if [ -d "$APP_DIR" ]; then
     cd "$APP_DIR" && git pull origin ${env.BRANCH_NAME} && cd ..
 else
-    git clone -b ${env.BRANCH_NAME} https://\$GIT_USERNAME:\$GIT_PASSWORD@github.com/sundhar04/learning2.git
+    git clone -b ${env.BRANCH_NAME} https://\$GIT_USERNAME:\$GIT_PASSWORD@github.com/sundhar04/learning3.git
 fi
 echo "Cleaning old containers and images for branch ${env.BRANCH_NAME}"
 sudo docker stop "${env.CONTAINER_NAME}" || true
@@ -95,7 +96,7 @@ def getBranchPort(branchName) {
             return '8080'
         case 'develop':
             return '8081'
-        case 'dev':
+        case 'second':
             return '8081'
         case 'staging':
             return '8082'
