@@ -6,9 +6,10 @@ pipeline {
         APP_DIR  = "learning3"  
         IMAGE_NAME = "sundhar04/githubimage:latest"
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
+        // PORT_NUMBER will be set dynamically in the script block
     }
+    
     stages {
-        
         stage("Checkout") {
             steps {
                // Use default SCM checkout instead of explicit scmGit to avoid conflicts
@@ -19,7 +20,6 @@ pipeline {
                    echo "Branch: ${env.BRANCH_NAME}, Port: ${env.PORT_NUMBER}, Container: ${env.CONTAINER_NAME}"
                }
             }
-            
         }
         stage("Deploy to EC2") {
             steps {
@@ -50,9 +50,22 @@ else
 fi
 echo "Cloning or updating repo"
 if [ -d "$APP_DIR" ]; then
-    cd "$APP_DIR" && git pull origin ${env.BRANCH_NAME} && cd ..
+    echo "Repository exists, updating..."
+    cd "$APP_DIR"
+    # Configure git to handle divergent branches
+    git config pull.rebase false
+    # Reset any local changes and pull fresh code
+    git fetch origin
+    git reset --hard origin/${env.BRANCH_NAME}
+    git pull origin ${env.BRANCH_NAME}
+    cd ..
 else
+    echo "Repository doesn't exist, cloning..."
     git clone -b ${env.BRANCH_NAME} https://\$GIT_USERNAME:\$GIT_PASSWORD@github.com/sundhar04/learning3.git
+    cd "$APP_DIR"
+    # Set the pull strategy for future pulls
+    git config pull.rebase false
+    cd ..
 fi
 echo "Cleaning old containers and images for branch ${env.BRANCH_NAME}"
 sudo docker stop "${env.CONTAINER_NAME}" || true
