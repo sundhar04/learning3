@@ -6,16 +6,13 @@ pipeline {
         APP_DIR  = "learning3"  
         IMAGE_NAME = "sundhar04/githubimage:latest"
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
-        // PORT_NUMBER will be set dynamically in the script block
     }
     
     stages {
         stage("Checkout") {
             steps {
-               // Use default SCM checkout instead of explicit scmGit to avoid conflicts
                checkout scm
                script {
-                   // Set PORT_NUMBER dynamically
                    env.PORT_NUMBER = getBranchPort(env.BRANCH_NAME)
                    echo "Branch: ${env.BRANCH_NAME}, Port: ${env.PORT_NUMBER}, Container: ${env.CONTAINER_NAME}"
                }
@@ -101,7 +98,6 @@ EOF
     }
 }
 
-// Function to determine port based on branch name
 def getBranchPort(branchName) {
     switch(branchName) {
         case 'main':
@@ -121,7 +117,6 @@ def getBranchPort(branchName) {
         case 'test':
             return '8083'
         default:
-            // For feature branches, use a hash-based port to avoid conflicts
             def hash = Math.abs(branchName.hashCode()) % 1000
             return (8100 + hash).toString()
     }
