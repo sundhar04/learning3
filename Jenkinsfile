@@ -7,6 +7,7 @@ pipeline {
         IMAGE_NAME = "sundhar04/githubimage:latest"
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
     }
+    
 
 
     stages {
