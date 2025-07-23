@@ -6,7 +6,7 @@ def summ():
     b=30
     c=-5
     sum=a+b+c
-    return f"the total is{sum}"
+    return f"the total is = {sum}"
 
 if __name__ == "__main__":
     
