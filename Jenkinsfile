@@ -23,101 +23,106 @@ pipeline {
             steps {
                 sshagent(['ec2-ssh-key']) {
                     withCredentials([usernamePassword(credentialsId: 'githubcreddddd', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
-                        sh '''
-ssh -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST << 'EOF'
-set -euo pipefail
-cd /home/ubuntu
+                        script {
+                            def branch = env.BRANCH_NAME
+                            def image = env.IMAGE_NAME
+                            def container = env.CONTAINER_NAME
+                            def port = env.PORT_NUMBER
+                            def app = env.APP_DIR
 
-# Docker Installation
-if ! command -v docker &> /dev/null; then
-    sudo apt-get update -y
-    sudo apt-get install -y ca-certificates curl gnupg lsb-release
-    sudo install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    echo \
-      "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-      https://download.docker.com/linux/ubuntu \
-      \$(lsb_release -cs) stable" | \
-      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt-get update -y
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    sudo usermod -aG docker ubuntu
-fi
+                            sh """
+                            ssh -o StrictHostKeyChecking=no \$EC2_USER@\$EC2_HOST << EOF
+                            set -euxo pipefail
 
-# Gitleaks Installation
-if ! command -v gitleaks &> /dev/null; then
-    curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
-        | grep "browser_download_url.*linux.*amd64" \
-        | cut -d '"' -f 4 \
-        | wget -qi -
-    chmod +x gitleaks* && sudo mv gitleaks* /usr/local/bin/gitleaks
-fi
+                            APP_DIR=${app}
+                            BRANCH_NAME=${branch}
+                            IMAGE_NAME=${image}
+                            CONTAINER_NAME=${container}
+                            PORT_NUMBER=${port}
 
-# Trivy Installation
-if ! command -v trivy &> /dev/null; then
-    sudo apt install -y wget apt-transport-https gnupg lsb-release
-    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-    echo "deb https://aquasecurity.github.io/trivy-repo/deb \$(lsb_release -sc) main" | \
-        sudo tee -a /etc/apt/sources.list.d/trivy.list
-    sudo apt update
-    sudo apt install -y trivy
-fi
+                            cd /home/ubuntu
 
-# Safety Installation
-if ! pip show safety &> /dev/null; then
-    pip install safety
-fi
+                            # Docker Installation
+                            if ! command -v docker &> /dev/null; then
+                                sudo apt-get update -y
+                                sudo apt-get install -y ca-certificates curl gnupg lsb-release
+                                sudo install -m 0755 -d /etc/apt/keyrings
+                                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                                echo "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \$(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                                sudo apt-get update -y
+                                sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+                                sudo usermod -aG docker ubuntu
+                            fi
 
-# Clone or Update Repo
-if [ -d "$APP_DIR" ]; then
-    cd "$APP_DIR"
-    git config pull.rebase false
-    git fetch origin
-    git reset --hard origin/${env.BRANCH_NAME}
-    git pull origin ${env.BRANCH_NAME}
-    cd ..
-else
-    git clone -b ${env.BRANCH_NAME} https://$GIT_USERNAME:$GIT_PASSWORD@github.com/sundhar04/learning3.git
-    cd "$APP_DIR"
-    git config pull.rebase false
-    cd ..
-fi
+                            # Gitleaks Installation
+                            if ! command -v gitleaks &> /dev/null; then
+                                curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest |
+                                grep "browser_download_url.*linux.*amd64" |
+                                cut -d '"' -f 4 |
+                                wget -qi -
+                                chmod +x gitleaks* && sudo mv gitleaks* /usr/local/bin/gitleaks
+                            fi
 
-# Secret Scan
-cd /home/ubuntu
+                            # Trivy Installation
+                            if ! command -v trivy &> /dev/null; then
+                                sudo apt install -y wget apt-transport-https gnupg lsb-release
+                                wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+                                echo "deb https://aquasecurity.github.io/trivy-repo/deb \$(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+                                sudo apt update
+                                sudo apt install -y trivy
+                            fi
 
-gitleaks detect --source "$APP_DIR" --exit-code 1 --report-path=gitleaks-report.json
+                            # Safety Installation
+                            if ! pip show safety &> /dev/null; then
+                                pip install safety
+                            fi
 
-# Dependency Scan
-if [ -f "$APP_DIR/requirements.txt" ]; then
-    pip install -r "$APP_DIR/requirements.txt"
-    safety check -r "$APP_DIR/requirements.txt" --full-report --exit-code 1
-fi
+                            # Clone or Update Repo
+                            if [ -d "\$APP_DIR" ]; then
+                                cd "\$APP_DIR"
+                                git config pull.rebase false
+                                git fetch origin
+                                git reset --hard origin/\$BRANCH_NAME
+                                git pull origin \$BRANCH_NAME
+                                cd ..
+                            else
+                                git clone -b \$BRANCH_NAME https://$GIT_USERNAME:$GIT_PASSWORD@github.com/sundhar04/learning3.git
+                            fi
 
-# Docker Cleanup
-sudo docker stop "${env.CONTAINER_NAME}" || true
-sudo docker rm "${env.CONTAINER_NAME}" || true
-sudo docker rmi "$IMAGE_NAME" || true
+                            # Secret Scan
+                            gitleaks detect --source "\$APP_DIR" --exit-code 1 --report-path=gitleaks-report.json || { echo "Gitleaks failed"; exit 1; }
 
-# Build Docker Image
-cd "$APP_DIR"
-sudo docker build -t "$IMAGE_NAME" .
+                            # Dependency Scan
+                            if [ -f "\$APP_DIR/requirements.txt" ]; then
+                                pip install -r "\$APP_DIR/requirements.txt"
+                                safety check -r "\$APP_DIR/requirements.txt" --full-report --exit-code 1 || { echo "Safety scan failed"; exit 1; }
+                            fi
 
-# Image Scan
-trivy image --exit-code 1 --severity HIGH,CRITICAL "$IMAGE_NAME"
+                            # Docker Cleanup
+                            sudo docker stop "\$CONTAINER_NAME" || true
+                            sudo docker rm "\$CONTAINER_NAME" || true
+                            sudo docker rmi "\$IMAGE_NAME" || true
 
-# Free Port
-EXISTING_CONTAINER=$(sudo docker ps -q --filter "publish=${env.PORT_NUMBER}")
-if [ ! -z "$EXISTING_CONTAINER" ]; then
-    sudo docker stop $EXISTING_CONTAINER
-    sudo docker rm $EXISTING_CONTAINER
-fi
+                            # Build Docker Image
+                            cd "\$APP_DIR"
+                            sudo docker build -t "\$IMAGE_NAME" .
 
-# Run Container
-sudo docker run -d --name "${env.CONTAINER_NAME}" -p ${env.PORT_NUMBER}:5000 "$IMAGE_NAME"
+                            # Image Scan
+                            trivy image --exit-code 1 --severity HIGH,CRITICAL "\$IMAGE_NAME" || { echo "Trivy scan failed"; exit 1; }
 
-EOF
-                        '''
+                            # Free Port
+                            EXISTING_CONTAINER=\$(sudo docker ps -q --filter "publish=\$PORT_NUMBER")
+                            if [ ! -z "\$EXISTING_CONTAINER" ]; then
+                                sudo docker stop \$EXISTING_CONTAINER
+                                sudo docker rm \$EXISTING_CONTAINER
+                            fi
+
+                            # Run Container
+                            sudo docker run -d --name "\$CONTAINER_NAME" -p \$PORT_NUMBER:5000 "\$IMAGE_NAME"
+
+                            EOF
+                            """
+                        }
                     }
                 }
             }
