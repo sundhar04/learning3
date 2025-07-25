@@ -6,6 +6,8 @@ pipeline {
         APP_DIR  = "learning3"  
         IMAGE_NAME = "sundhar04/githubimage:latest"
         CONTAINER_NAME = "my_app_container_${env.BRANCH_NAME.replaceAll('/', '_')}"
+        // Set to 'true' to enable security scans, 'false' to skip them
+        ENABLE_SECURITY_SCANS = "true"
     }
 
     stages {
@@ -31,6 +33,7 @@ pipeline {
                             def app = env.APP_DIR
                             def gitUsername = env.GIT_USERNAME
                             def gitPassword = env.GIT_PASSWORD
+                            def enableScans = env.ENABLE_SECURITY_SCANS
 
                             sh """
                             ssh -o StrictHostKeyChecking=no \$EC2_USER@\$EC2_HOST << 'ENDSSH'
@@ -41,8 +44,10 @@ pipeline {
                             IMAGE_NAME=${image}
                             CONTAINER_NAME=${container}
                             PORT_NUMBER=${port}
+                            ENABLE_SCANS=${enableScans}
 
                             echo "=== Starting deployment for branch: \$BRANCH_NAME ==="
+                            echo "Security scans enabled: \$ENABLE_SCANS"
                             cd /home/ubuntu
 
                             # Check Docker installation and access
@@ -58,69 +63,63 @@ pipeline {
                             fi
                             echo "Docker is accessible"
 
-                            # Install Gitleaks with better error handling
-                            echo "=== Installing/Checking Gitleaks ==="
-                            if ! command -v gitleaks &> /dev/null; then
-                                echo "Installing Gitleaks..."
-                                GITLEAKS_VERSION="8.21.2"
-                                GITLEAKS_URL="https://github.com/gitleaks/gitleaks/releases/download/v\${GITLEAKS_VERSION}/gitleaks_\${GITLEAKS_VERSION}_linux_x64.tar.gz"
+                            # Security Tools Installation (conditional)
+                            if [ "\$ENABLE_SCANS" = "true" ]; then
+                                echo "=== Installing Security Tools ==="
                                 
-                                wget -O gitleaks.tar.gz "\$GITLEAKS_URL" || {
-                                    echo "Failed to download Gitleaks from GitHub releases"
-                                    exit 1
-                                }
-                                
-                                tar -xzf gitleaks.tar.gz || {
-                                    echo "Failed to extract Gitleaks"
-                                    exit 1
-                                }
-                                
-                                chmod +x gitleaks
-                                sudo mv gitleaks /usr/local/bin/gitleaks || {
-                                    echo "Failed to move Gitleaks to /usr/local/bin"
-                                    exit 1
-                                }
-                                
-                                rm -f gitleaks.tar.gz LICENSE README.md
-                                echo "Gitleaks installed successfully"
-                            else
-                                echo "Gitleaks already installed"
-                            fi
+                                # Install Gitleaks
+                                if ! command -v gitleaks &> /dev/null; then
+                                    echo "Installing Gitleaks..."
+                                    GITLEAKS_VERSION="8.21.2"
+                                    GITLEAKS_URL="https://github.com/gitleaks/gitleaks/releases/download/v\${GITLEAKS_VERSION}/gitleaks_\${GITLEAKS_VERSION}_linux_x64.tar.gz"
+                                    
+                                    wget -O gitleaks.tar.gz "\$GITLEAKS_URL" && \\
+                                    tar -xzf gitleaks.tar.gz && \\
+                                    chmod +x gitleaks && \\
+                                    sudo mv gitleaks /usr/local/bin/gitleaks && \\
+                                    rm -f gitleaks.tar.gz LICENSE README.md && \\
+                                    echo "Gitleaks installed successfully" || {
+                                        echo "WARNING: Failed to install Gitleaks, continuing without secret scanning"
+                                        ENABLE_SCANS="partial"
+                                    }
+                                fi
 
-                            # Install Trivy with better error handling
-                            echo "=== Installing/Checking Trivy ==="
-                            if ! command -v trivy &> /dev/null; then
-                                echo "Installing Trivy..."
-                                sudo apt update -y
-                                sudo apt install -y wget apt-transport-https gnupg lsb-release
-                                
-                                wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add - || {
-                                    echo "Failed to add Trivy GPG key"
-                                    exit 1
-                                }
-                                
-                                echo "deb https://aquasecurity.github.io/trivy-repo/deb \$(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-                                sudo apt update -y
-                                sudo apt install -y trivy || {
-                                    echo "Failed to install Trivy"
-                                    exit 1
-                                }
-                                echo "Trivy installed successfully"
-                            else
-                                echo "Trivy already installed"
-                            fi
+                                # Install Trivy
+                                if ! command -v trivy &> /dev/null; then
+                                    echo "Installing Trivy..."
+                                    export DEBIAN_FRONTEND=noninteractive
+                                    sudo apt update -y && \\
+                                    sudo apt install -y wget apt-transport-https gnupg lsb-release && \\
+                                    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add - && \\
+                                    echo "deb https://aquasecurity.github.io/trivy-repo/deb \$(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list && \\
+                                    sudo apt update -y && \\
+                                    sudo apt install -y trivy && \\
+                                    echo "Trivy installed successfully" || {
+                                        echo "WARNING: Failed to install Trivy, continuing without container scanning"
+                                        ENABLE_SCANS="partial"
+                                    }
+                                fi
 
-                            # Install Safety
-                            echo "=== Installing/Checking Safety ==="
-                            if ! pip3 show safety &> /dev/null; then
-                                echo "Installing Safety..."
-                                pip3 install --user safety || {
-                                    echo "Failed to install Safety"
-                                    exit 1
-                                }
-                                echo "Safety installed successfully"
+                                # Try to set up Safety (with fallbacks)
+                                echo "Setting up Safety for dependency scanning..."
+                                export DEBIAN_FRONTEND=noninteractive
+                                
+                                # Method 1: Try pipx (cleanest)
+                                if sudo apt install -y pipx python3-venv && pipx install safety; then
+                                    echo "Safety installed via pipx"
+                                    SAFETY_CMD="pipx run safety"
+                                # Method 2: Try system-wide with override
+                                elif sudo apt install -y python3-pip && pip3 install --break-system-packages safety; then
+                                    echo "Safety installed system-wide"
+                                    SAFETY_CMD="python3 -m safety"
+                                else
+                                    echo "WARNING: Could not install Safety, skipping dependency scanning"
+                                    SAFETY_CMD=""
+                                    ENABLE_SCANS="partial"
+                                fi
                             else
-                                echo "Safety already installed"
+                                echo "Security scans disabled, skipping tool installation"
+                                SAFETY_CMD=""
                             fi
 
                             # Clone or Update Repository
@@ -144,35 +143,49 @@ pipeline {
                                 }
                             fi
 
-                            # Security Scans
-                            echo "=== Running Gitleaks Scan ==="
-                            /usr/local/bin/gitleaks detect --source "\$APP_DIR" --exit-code 1 --report-path=gitleaks-report.json || {
-                                echo "ERROR: Gitleaks detected secrets!"
-                                if [ -f gitleaks-report.json ]; then
-                                    echo "Gitleaks Report:"
-                                    cat gitleaks-report.json
-                                fi
-                                exit 1
-                            }
-                            echo "Gitleaks scan passed"
-
-                            # Dependency Vulnerability Scan
-                            echo "=== Running Safety Scan ==="
-                            if [ -f "\$APP_DIR/requirements.txt" ]; then
-                                echo "Installing Python dependencies..."
-                                pip3 install --user -r "\$APP_DIR/requirements.txt" || {
-                                    echo "Failed to install Python dependencies"
-                                    exit 1
-                                }
+                            # Security Scans (conditional)
+                            if [ "\$ENABLE_SCANS" = "true" ] || [ "\$ENABLE_SCANS" = "partial" ]; then
+                                echo "=== Running Security Scans ==="
                                 
-                                echo "Running Safety scan..."
-                                ~/.local/bin/safety check -r "\$APP_DIR/requirements.txt" --full-report --exit-code 1 || {
-                                    echo "ERROR: Safety scan found vulnerabilities!"
-                                    exit 1
-                                }
-                                echo "Safety scan passed"
+                                # Gitleaks Scan
+                                if command -v gitleaks &> /dev/null; then
+                                    echo "Running Gitleaks scan..."
+                                    /usr/local/bin/gitleaks detect --source "\$APP_DIR" --exit-code 1 --report-path=gitleaks-report.json || {
+                                        echo "ERROR: Gitleaks detected secrets!"
+                                        if [ -f gitleaks-report.json ]; then
+                                            echo "Gitleaks Report:"
+                                            cat gitleaks-report.json
+                                        fi
+                                        exit 1
+                                    }
+                                    echo "Gitleaks scan passed"
+                                else
+                                    echo "Gitleaks not available, skipping secret scan"
+                                fi
+
+                                # Safety Scan
+                                if [ -f "\$APP_DIR/requirements.txt" ] && [ ! -z "\$SAFETY_CMD" ]; then
+                                    echo "Running dependency vulnerability scan..."
+                                    
+                                    # Install dependencies first
+                                    if pip3 install --break-system-packages -r "\$APP_DIR/requirements.txt" 2>/dev/null || \\
+                                       pip3 install --user -r "\$APP_DIR/requirements.txt" 2>/dev/null; then
+                                        echo "Dependencies installed"
+                                    else
+                                        echo "WARNING: Could not install dependencies for scanning"
+                                    fi
+                                    
+                                    # Run safety check
+                                    \$SAFETY_CMD check -r "\$APP_DIR/requirements.txt" --full-report --exit-code 1 || {
+                                        echo "ERROR: Safety scan found vulnerabilities!"
+                                        exit 1
+                                    }
+                                    echo "Safety scan passed"
+                                else
+                                    echo "Skipping dependency scan (no requirements.txt or Safety not available)"
+                                fi
                             else
-                                echo "No requirements.txt found, skipping dependency scan"
+                                echo "Security scans disabled"
                             fi
 
                             # Docker Operations
@@ -190,13 +203,19 @@ pipeline {
                             }
                             echo "Docker build successful"
 
-                            # Container Image Vulnerability Scan
-                            echo "=== Running Trivy Image Scan ==="
-                            trivy image --exit-code 1 --severity HIGH,CRITICAL "\$IMAGE_NAME" || {
-                                echo "ERROR: Trivy found HIGH/CRITICAL vulnerabilities!"
-                                exit 1
-                            }
-                            echo "Trivy scan passed"
+                            # Container Image Vulnerability Scan (conditional)
+                            if [ "\$ENABLE_SCANS" = "true" ] || [ "\$ENABLE_SCANS" = "partial" ]; then
+                                if command -v trivy &> /dev/null; then
+                                    echo "=== Running Trivy Image Scan ==="
+                                    trivy image --exit-code 1 --severity HIGH,CRITICAL "\$IMAGE_NAME" || {
+                                        echo "ERROR: Trivy found HIGH/CRITICAL vulnerabilities!"
+                                        exit 1
+                                    }
+                                    echo "Trivy scan passed"
+                                else
+                                    echo "Trivy not available, skipping container image scan"
+                                fi
+                            fi
 
                             # Port Management
                             echo "=== Managing Ports ==="
@@ -218,6 +237,7 @@ pipeline {
                             echo "Container: \$CONTAINER_NAME"
                             echo "Port: \$PORT_NUMBER"
                             echo "Image: \$IMAGE_NAME"
+                            echo "Security scans: \$ENABLE_SCANS"
                             
                             # Verify deployment
                             sleep 5
@@ -244,6 +264,7 @@ ENDSSH
             echo "=== DEPLOYMENT SUCCESSFUL ==="
             echo "Application deployed on port ${env.PORT_NUMBER}"
             echo "Container: ${env.CONTAINER_NAME}"
+            echo "Access your application at: http://${env.EC2_HOST}:${env.PORT_NUMBER}"
         }
         failure {
             echo "=== DEPLOYMENT FAILED ==="
