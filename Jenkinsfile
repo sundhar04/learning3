@@ -29,9 +29,11 @@ pipeline {
                             def container = env.CONTAINER_NAME
                             def port = env.PORT_NUMBER
                             def app = env.APP_DIR
+                            def gitUsername = env.GIT_USERNAME
+                            def gitPassword = env.GIT_PASSWORD
 
                             sh """
-                            ssh -o StrictHostKeyChecking=no \$EC2_USER@\$EC2_HOST << 'EOF'
+                            ssh -o StrictHostKeyChecking=no \$EC2_USER@\$EC2_HOST << 'ENDSSH'
                             set -euxo pipefail
 
                             APP_DIR=${app}
@@ -40,118 +42,195 @@ pipeline {
                             CONTAINER_NAME=${container}
                             PORT_NUMBER=${port}
 
+                            echo "=== Starting deployment for branch: \$BRANCH_NAME ==="
                             cd /home/ubuntu
 
-                            # Check if Docker is installed and user is in docker group
+                            # Check Docker installation and access
+                            echo "=== Checking Docker ==="
                             if ! command -v docker &> /dev/null; then
-                                echo "Docker not found. Please install Docker and add ubuntu user to docker group manually."
+                                echo "ERROR: Docker not found!"
                                 exit 1
                             fi
 
-                            # Test docker access without sudo
                             if ! docker ps &> /dev/null; then
-                                echo "Docker requires sudo. Please add ubuntu user to docker group and restart session."
-                                echo "Run: sudo usermod -aG docker ubuntu && newgrp docker"
+                                echo "ERROR: Cannot access Docker without sudo!"
                                 exit 1
                             fi
+                            echo "Docker is accessible"
 
-                            # Gitleaks Installation (only if not present)
+                            # Install Gitleaks with better error handling
+                            echo "=== Installing/Checking Gitleaks ==="
                             if ! command -v gitleaks &> /dev/null; then
-                                curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest |
-                                grep "browser_download_url.*linux.*amd64" |
-                                cut -d '"' -f 4 |
-                                wget -qi -
-                                chmod +x gitleaks* && sudo mv gitleaks* /usr/local/bin/gitleaks || {
-                                    echo "Failed to install gitleaks. Please install manually."
+                                echo "Installing Gitleaks..."
+                                GITLEAKS_VERSION="8.21.2"
+                                GITLEAKS_URL="https://github.com/gitleaks/gitleaks/releases/download/v\${GITLEAKS_VERSION}/gitleaks_\${GITLEAKS_VERSION}_linux_x64.tar.gz"
+                                
+                                wget -O gitleaks.tar.gz "\$GITLEAKS_URL" || {
+                                    echo "Failed to download Gitleaks from GitHub releases"
                                     exit 1
                                 }
+                                
+                                tar -xzf gitleaks.tar.gz || {
+                                    echo "Failed to extract Gitleaks"
+                                    exit 1
+                                }
+                                
+                                chmod +x gitleaks
+                                sudo mv gitleaks /usr/local/bin/gitleaks || {
+                                    echo "Failed to move Gitleaks to /usr/local/bin"
+                                    exit 1
+                                }
+                                
+                                rm -f gitleaks.tar.gz LICENSE README.md
+                                echo "Gitleaks installed successfully"
+                            else
+                                echo "Gitleaks already installed"
                             fi
 
-                            # Trivy Installation (only if not present)
+                            # Install Trivy with better error handling
+                            echo "=== Installing/Checking Trivy ==="
                             if ! command -v trivy &> /dev/null; then
-                                echo "Trivy not found. Please install Trivy manually."
-                                echo "Installation commands:"
-                                echo "sudo apt install -y wget apt-transport-https gnupg lsb-release"
-                                echo "wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -"
-                                echo "echo 'deb https://aquasecurity.github.io/trivy-repo/deb \$(lsb_release -sc) main' | sudo tee -a /etc/apt/sources.list.d/trivy.list"
-                                echo "sudo apt update && sudo apt install -y trivy"
-                                exit 1
-                            fi
-
-                            # Safety Installation
-                            if ! pip show safety &> /dev/null; then
-                                pip install --user safety || {
-                                    echo "Failed to install safety. Please install manually."
+                                echo "Installing Trivy..."
+                                sudo apt update -y
+                                sudo apt install -y wget apt-transport-https gnupg lsb-release
+                                
+                                wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add - || {
+                                    echo "Failed to add Trivy GPG key"
                                     exit 1
                                 }
+                                
+                                echo "deb https://aquasecurity.github.io/trivy-repo/deb \$(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+                                sudo apt update -y
+                                sudo apt install -y trivy || {
+                                    echo "Failed to install Trivy"
+                                    exit 1
+                                }
+                                echo "Trivy installed successfully"
+                            else
+                                echo "Trivy already installed"
                             fi
 
-                            # Clone or Update Repo
+                            # Install Safety
+                            echo "=== Installing/Checking Safety ==="
+                            if ! pip3 show safety &> /dev/null; then
+                                echo "Installing Safety..."
+                                pip3 install --user safety || {
+                                    echo "Failed to install Safety"
+                                    exit 1
+                                }
+                                echo "Safety installed successfully"
+                            else
+                                echo "Safety already installed"
+                            fi
+
+                            # Clone or Update Repository
+                            echo "=== Cloning/Updating Repository ==="
                             if [ -d "\$APP_DIR" ]; then
+                                echo "Updating existing repository"
                                 cd "\$APP_DIR"
                                 git config pull.rebase false
                                 git fetch origin
                                 git reset --hard origin/\$BRANCH_NAME
-                                git pull origin \$BRANCH_NAME
+                                git pull origin \$BRANCH_NAME || {
+                                    echo "Failed to pull latest changes"
+                                    exit 1
+                                }
                                 cd ..
                             else
-                                git clone -b \$BRANCH_NAME https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/sundhar04/learning3.git
+                                echo "Cloning repository"
+                                git clone -b \$BRANCH_NAME https://${gitUsername}:${gitPassword}@github.com/sundhar04/learning3.git || {
+                                    echo "Failed to clone repository"
+                                    exit 1
+                                }
                             fi
 
-                            # Secret Scan
-                            gitleaks detect --source "\$APP_DIR" --exit-code 1 --report-path=gitleaks-report.json || { 
-                                echo "Gitleaks detected secrets in the code"
-                                cat gitleaks-report.json 2>/dev/null || true
+                            # Security Scans
+                            echo "=== Running Gitleaks Scan ==="
+                            /usr/local/bin/gitleaks detect --source "\$APP_DIR" --exit-code 1 --report-path=gitleaks-report.json || {
+                                echo "ERROR: Gitleaks detected secrets!"
+                                if [ -f gitleaks-report.json ]; then
+                                    echo "Gitleaks Report:"
+                                    cat gitleaks-report.json
+                                fi
                                 exit 1
                             }
+                            echo "Gitleaks scan passed"
 
-                            # Dependency Scan
+                            # Dependency Vulnerability Scan
+                            echo "=== Running Safety Scan ==="
                             if [ -f "\$APP_DIR/requirements.txt" ]; then
-                                pip install --user -r "\$APP_DIR/requirements.txt" || {
-                                    echo "Failed to install requirements"
+                                echo "Installing Python dependencies..."
+                                pip3 install --user -r "\$APP_DIR/requirements.txt" || {
+                                    echo "Failed to install Python dependencies"
                                     exit 1
                                 }
-                                ~/.local/bin/safety check -r "\$APP_DIR/requirements.txt" --full-report --exit-code 1 || { 
-                                    echo "Safety scan detected vulnerabilities"
+                                
+                                echo "Running Safety scan..."
+                                ~/.local/bin/safety check -r "\$APP_DIR/requirements.txt" --full-report --exit-code 1 || {
+                                    echo "ERROR: Safety scan found vulnerabilities!"
                                     exit 1
                                 }
+                                echo "Safety scan passed"
+                            else
+                                echo "No requirements.txt found, skipping dependency scan"
                             fi
 
-                            # Docker Cleanup (without sudo)
-                            docker stop "\$CONTAINER_NAME" 2>/dev/null || true
-                            docker rm "\$CONTAINER_NAME" 2>/dev/null || true
-                            docker rmi "\$IMAGE_NAME" 2>/dev/null || true
+                            # Docker Operations
+                            echo "=== Docker Operations ==="
+                            echo "Stopping and removing existing container..."
+                            docker stop "\$CONTAINER_NAME" 2>/dev/null || echo "Container not running"
+                            docker rm "\$CONTAINER_NAME" 2>/dev/null || echo "Container not found"
+                            docker rmi "\$IMAGE_NAME" 2>/dev/null || echo "Image not found"
 
-                            # Build Docker Image
+                            echo "Building Docker image..."
                             cd "\$APP_DIR"
                             docker build -t "\$IMAGE_NAME" . || {
-                                echo "Docker build failed"
+                                echo "ERROR: Docker build failed!"
                                 exit 1
                             }
+                            echo "Docker build successful"
 
-                            # Image Scan
-                            trivy image --exit-code 1 --severity HIGH,CRITICAL "\$IMAGE_NAME" || { 
-                                echo "Trivy scan found HIGH/CRITICAL vulnerabilities"
+                            # Container Image Vulnerability Scan
+                            echo "=== Running Trivy Image Scan ==="
+                            trivy image --exit-code 1 --severity HIGH,CRITICAL "\$IMAGE_NAME" || {
+                                echo "ERROR: Trivy found HIGH/CRITICAL vulnerabilities!"
                                 exit 1
                             }
+                            echo "Trivy scan passed"
 
-                            # Free Port
+                            # Port Management
+                            echo "=== Managing Ports ==="
                             EXISTING_CONTAINER=\$(docker ps -q --filter "publish=\$PORT_NUMBER" 2>/dev/null || true)
                             if [ ! -z "\$EXISTING_CONTAINER" ]; then
+                                echo "Stopping container using port \$PORT_NUMBER"
                                 docker stop \$EXISTING_CONTAINER
                                 docker rm \$EXISTING_CONTAINER
                             fi
 
-                            # Run Container
+                            # Deploy Container
+                            echo "=== Deploying Container ==="
                             docker run -d --name "\$CONTAINER_NAME" -p \$PORT_NUMBER:5000 "\$IMAGE_NAME" || {
-                                echo "Failed to start container"
+                                echo "ERROR: Failed to start container!"
                                 exit 1
                             }
 
-                            echo "Container \$CONTAINER_NAME started successfully on port \$PORT_NUMBER"
-                            docker ps | grep "\$CONTAINER_NAME"
+                            echo "=== Deployment Successful ==="
+                            echo "Container: \$CONTAINER_NAME"
+                            echo "Port: \$PORT_NUMBER"
+                            echo "Image: \$IMAGE_NAME"
+                            
+                            # Verify deployment
+                            sleep 5
+                            if docker ps | grep -q "\$CONTAINER_NAME"; then
+                                echo "Container is running successfully"
+                                docker ps | grep "\$CONTAINER_NAME"
+                            else
+                                echo "ERROR: Container failed to start!"
+                                docker logs "\$CONTAINER_NAME" 2>/dev/null || true
+                                exit 1
+                            fi
 
-EOF
+ENDSSH
                             """
                         }
                     }
@@ -162,10 +241,13 @@ EOF
 
     post {
         success {
-            echo "Deployment successful"
+            echo "=== DEPLOYMENT SUCCESSFUL ==="
+            echo "Application deployed on port ${env.PORT_NUMBER}"
+            echo "Container: ${env.CONTAINER_NAME}"
         }
         failure {
-            echo "Deployment failed"
+            echo "=== DEPLOYMENT FAILED ==="
+            echo "Check the logs above for error details"
         }
     }
 }
